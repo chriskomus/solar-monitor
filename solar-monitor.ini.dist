@@ -38,6 +38,10 @@ type = VictronConnect
 mac = 11:11:11:11:11:11
 reconnect = False
 
+[monitoring_1]
+type = Junctek
+mac = 11:11:11:11:11:11
+reconnect = False
 
 [datalogger]
 url = http://server/solar/api/
@@ -45,9 +49,9 @@ token = 39129e20be0503937cb72a5f719337cc
 
 [mqtt]
 # Address to the mqtt broker
-broker = mqtt.server.addr 
+broker = mqtt.server.addr
 # All topics are prefixed by this prefix
 # E.g. "solar/battery_1/voltage"
-prefix = solar                
+prefix = solar
 
 
