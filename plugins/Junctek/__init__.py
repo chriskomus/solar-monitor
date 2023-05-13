@@ -1,6 +1,6 @@
+import re
 import logging
 import libscrc
-
 
 class Config():
     SEND_ACK  = False
@@ -10,112 +10,53 @@ class Config():
 
 class Util():
     '''
-    Class for reading and parsing data from Junctek K170F Battery Monitor
+    Class for reading and parsing data from Junctek KF-KG Series Battery Monitor.
+
+    All parameters from the Junctek are in the Parameters().PARAM_KEYS dict.
+    Any formatting changes takes place in formatValues()
+
+    User defined settings are in class: UserSettings()
     '''
+    class UserSettings():
+        # Set your battery capacity here (as an int):
+        BATTERY_CAPACITY_AH = 100
+
+        # The Junctek only transmit its charging state when
+        # the charging state changes, so set to True to assume battery
+        # is charging when the script starts.
+        START_SCRIPT_CHARGING = False
+
+
     class Parameters():
         BEGINNING_OF_STREAM = "BB"
         END_OF_STREAM = "EE"
         PARAM_KEYS = {
-            "volts": "C0",
-            "amps": "C1",
-            "watts": "D8",
+            "voltage": "C0",
+            "current": "C1",
+            "dir_of_current": "D1",
             "ah_remaining": "D2",
             "mins_remaining": "D6",
+            "power": "D8",
+            "temp": "D9"
         }
 
     def __init__(self, power_device):
         self.PowerDevice = power_device
-
-
-    def getValue(self, buf, start, end):
-        # Reads "start" -> "end" from "buf" and return the hex-characters in the correct order
-        string = buf[start:end + 1]
-        # logging.debug(string)
-        e = end + 1
-        b = end - 1
-        string = ""
-        while b >= start:
-            chrs = buf[b:e]
-            # logging.debug(chrs)
-            e = b
-            b = b - 2
-            string += chr(chrs[0]) + chr(chrs[1])
-            # logging.debug(string)
-        try:
-            ret = int(string, 16)
-        except Exception as e:
-            ret = 0
-        return ret
-
+        self.charging = self.UserSettings().START_SCRIPT_CHARGING
 
     def notificationUpdate(self, data, char):
         """
         Gets the binary data from the BLE-device and converts it to a byte stream
         """
-        value = str(data.hex()).upper()
+        bs = str(data.hex()).upper()
 
-        if not self.validate(value):
+        if not self.validate(bs):
             return False
 
-        print(value)
-
-        # cmdData = ""
-        # if data != None and len(data):
-        #     i = 0
-        #     while i < len(data):
-        #         # logging.debug("Revindex {} {} Data: {}".format(i, self.Revindex, data[i]))
-        #         # logging.debug("RevBuf begin {}".format(self.RevBuf))
-        #         if self.Revindex > 121:
-        #             # logging.debug("Revindex  > 121 - parsing done")
-        #             self.Revindex = 0
-        #             self.end = 0
-        #             self.RecvDataType = self.SOI
-        #         # if data[i] == 146:
-        #             # logging.debug("Data_1 == 146 start of info")
-        #             # self.RecvDataType = self.INFO
-        #             # self.Revindex = 0
-        #         # logging.debug("RecvDataType {} {}".format(i, self.RecvDataType))
-        #         if self.RecvDataType == self.SOI:
-        #             # logging.debug("RecvDataType == 1 -> SOI")
-        #             # logging.debug("Data_1 == {} &255 == {}".format(data[i], data[i] & 255))
-        #             if data[i] == 146:
-        #                 # logging.debug("Data_1 & 255 == 146 start of info")
-        #                 self.RecvDataType = self.INFO
-        #                 self.RevBuf[self.Revindex] = data[i]
-        #                 self.Revindex = self.Revindex + 1
-        #         elif self.RecvDataType == self.INFO:
-        #             # logging.debug("RecvDataType == 2 -> INFO")
-        #             # logging.debug("Revindex {} Data_1 == {}".format(self.Revindex, data[i]))
-        #             self.RevBuf[self.Revindex] = data[i]
-        #             self.Revindex = self.Revindex + 1
-
-        #             if data[i] == 12:
-        #                 # logging.debug("Data_i == 12 - end: {} Revindex {}".format(self.end, self.Revindex))
-        #                 if self.end < 110:
-        #                     self.end = self.Revindex
-        #                 # if self.Revindex != 121 and self.Revindex != 66 and self.Revindex != 88:
-        #                 # else:
-        #             # if self.Revindex == 121 or self.Revindex == 66 or self.Revindex == 88:
-        #                 if self.Revindex == 121:
-        #                     self.RecvDataType = self.EOI
-        #             # else:
-        #         elif self.RecvDataType == self.EOI:
-        #             # logging.debug("RecvDataType == 3 -> EOI")
-        #             # logging.debug("Validate Checksum: {}".format(self.validateChecksum(self.RevBuf)))
-        #             if self.validateChecksum(self.RevBuf):
-        #                 # cmdData = str(self.RevBuf, 1, self.Revindex)
-        #                 # logging.debug("{} revindex: {}".format(self.TAG, self.Revindex))
-        #                 cmdData = self.RevBuf[1:self.Revindex]
-        #                 self.Revindex = 0
-        #                 self.end = 0
-        #                 self.RecvDataType = self.SOI
-        #                 return self.handleMessage(cmdData)
-        #             self.Revindex = 0
-        #             self.end = 0
-        #             self.RecvDataType = self.SOI
-        #         i += 1
-        # # logging.debug("broadcastUpdate End cmdData: {} RevBuf {}".format(cmdData, self.RevBuf))
-        # return False
+        values = self.getValues(bs)
+        formatted_values = self.formatValues(values)
+        # logging.debug(formatted_values)
+        return self.handleMessage(formatted_values)
 
     def validate(self, bs):
         """
@@ -135,39 +76,122 @@ class Util():
             return False
 
         if not [v for v in self.Parameters.PARAM_KEYS.values() if v in bs]:
-            logging.debug("No parameters found in stream: {}".format(bs))
+            # logging.debug("No parameters found in stream: {}".format(bs))
             return False
 
         return True
 
-    def handleMessage(self, message):
-        # Accepts a list of hex-characters, and returns the human readable values into the powerDevice object
-        logging.debug("handleMessage {}".format(message))
-        if message == None or "" == message:
-            return False
-        # logging.debug("test handleMessage == {}".format(message))
-        if len(message) < 38:
-            logging.info("len message < 38: {}".format(len(message)))
-            return False
-        # logging.info("Parsing data from a {}".format(self.DeviceType))
+    def getValues(self, bs):
+        """
+        Get raw values from the bytestream:
 
-        self.PowerDevice.entities.msg = message
-        # if self.DeviceType == '12V100Ah-027':
-        self.PowerDevice.entities.mvoltage = self.getValue(message, 0, 7)
-        logging.debug("mVoltage: {}".format(self.getValue(message, 0, 7)))
-        mcurrent = self.getValue(message, 8, 15)
-        if mcurrent > 2147483647:
-            mcurrent = mcurrent - 4294967295
-        self.PowerDevice.entities.mcurrent = mcurrent
-        self.PowerDevice.entities.mcapacity = self.getValue(message, 16, 23)
-        self.PowerDevice.entities.charge_cycles = self.getValue(message, 24, 27)
-        self.PowerDevice.entities.soc = self.getValue(message, 28, 31)
-        self.PowerDevice.entities.temperature = self.getValue(message, 32, 35)
-        self.PowerDevice.entities.status = self.getValue(message, 36, 37)
-        self.PowerDevice.entities.afestatus = self.getValue(message, 40, 41)
-        i = 0
-        while i < 16:
-            self.PowerDevice.entities.cell_mvoltage = (i + 1, self.getValue(message, (i * 4) + 44, (i * 4) + 47))
-            i = i + 1
+        Returns a dict containing any keys in Parameters().PARAM_KEYS
+        and raw values found in the bytestream.
+
+        Bytestreams are varying lengths, with hex keys and decimal values, and follow this format:
+        [starting byte] [dec value] [hex param key] ... [dec value] [hex param key] ... [checksum] [ending byte]
+
+        The value precedes the hex parameter key.
+        ie: 12.32v would be: 1232C0, where 1232=12.32v and C0=voltage param key
+
+        To modify or add new parameters, change Parameters().PARAM_KEYS. This function will grab any new values it
+        finds that can be associated with a param key.
+        """
+        # params = [i for i in self.Parameters().PARAM_KEYS.values()]
+        params_keys = list(self.Parameters().PARAM_KEYS.keys())
+        params_values = list(self.Parameters().PARAM_KEYS.values())
+
+        # split bs into a list of all values and hex keys
+        bs_list = [bs[i:i+2] for i in range(0, len(bs), 2)]
+
+        # reverse the list so that values come after hex params
+        bs_list_rev = list(reversed(bs_list))
+
+        values = {}
+        # iterate through the list and if a param is found,
+        # add it as a key to the dict. The value for that key is a
+        # concatenation of all following elements in the list
+        # until a non-numeric element appears. This would either
+        # be the next param or the beginning hex value.
+        for i in range(len(bs_list_rev)-1):
+            if bs_list_rev[i] in params_values:
+                value_str = ''
+                j = i + 1
+                while j < len(bs_list_rev) and bs_list_rev[j].isdigit():
+                    value_str = bs_list_rev[j] + value_str
+                    j += 1
+
+                position = params_values.index(bs_list_rev[i])
+
+                key = params_keys[position]
+                values[key] = value_str
+
+        return values
+
+    def formatValues(self, values):
+        """
+        Format the value to the right decimal place, or perform other formatting
+        """
+        for key,value in list(values.items()):
+
+            if not value.isdigit():
+                del values[key]
+
+            val_int = int(value)
+            if key == "voltage":
+                values[key] = val_int / 100
+            elif key == "current":
+                values[key] = val_int / 100
+            elif key == "dir_of_current":
+                if value == "01":
+                    self.charging = True
+                else:
+                    self.charging = False
+            elif key == "ah_remaining":
+                values[key] = val_int / 1000
+            elif key == "mins_remaining":
+                values[key] = val_int
+            elif key == "power":
+                values[key] = val_int / 100
+            elif key == "temp":
+                values[key] = val_int - 100
+
+        # Display current as negative numbers if discharging
+        if self.charging == False:
+            if "current" in values:
+                values["current"] *= -1
+            if "power" in values:
+                values["power"] *= -1
+
+        # Calculate percentage
+        if isinstance(self.UserSettings().BATTERY_CAPACITY_AH, int) and "ah_remaining" in values:
+            values["soc"] = values["ah_remaining"] / self.UserSettings().BATTERY_CAPACITY_AH * 100
+
+        # Append max capacity
+        values["max_capacity"] = self.UserSettings().BATTERY_CAPACITY_AH
+
+        return values
+
+
+    def handleMessage(self, values):
+        if not values:
+            return False
+
+        if "voltage" in values:
+            self.PowerDevice.entities.voltage = values["voltage"]
+        if "current" in values:
+            self.PowerDevice.entities.current = values["current"]
+        if "power" in values:
+            self.PowerDevice.entities.power = values["power"]
+        if "max_capacity" in values:
+            self.PowerDevice.entities.max_capacity = values["max_capacity"]
+        if "ah_remaining" in values:
+            self.PowerDevice.entities.exp_capacity = values["ah_remaining"]
+        if "mins_remaining" in values:
+            self.PowerDevice.entities.mins_remaining = values["mins_remaining"]
+        if "soc" in values:
+            self.PowerDevice.entities.soc = values["soc"]
+        if "temp" in values:
+            self.PowerDevice.entities.temperature_celsius = values["temp"]
 
         return True

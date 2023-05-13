@@ -89,6 +89,8 @@ class SolarDevice(gatt.Device):
             self.entities = InverterDevice(parent=self)
         elif "rectifier" in self.logger_name:
             self.entities = RectifierDevice(parent=self)
+        elif "monitoring" in self.logger_name:
+            self.entities = MonitoringDevice(parent=self)
         else:
             self.entities = PowerDevice(parent=self)
 
@@ -209,7 +211,7 @@ class SolarDevice(gatt.Device):
             items = ['current', 'input_current', 'charge_current',
                      'voltage', 'input_voltage', 'charge_voltage',
                      'power',   'input_power',   'charge_power',
-                     'soc', 'capacity', 'exp_capacity', 'max_capacity', 'charge_cycles', 'state', 'health', 'power_switch'
+                     'soc', 'capacity', 'exp_capacity', 'max_capacity', 'charge_cycles', 'state', 'health', 'power_switch', 'mins_remaining'
                     ]
             for item in items:
                 try:
@@ -973,3 +975,25 @@ class BatteryDevice(PowerDevice):
         if was != self.health:
             logging.info("[{}] Value of {} changed from {} to {}".format(self.name, 'health', was, self.health))
 
+
+class MonitoringDevice(BatteryDevice):
+    '''
+    Special class for Battery Monitoring Devices.
+    Extending BatteryDevice class with more properties specifically for the battery monitor
+    '''
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        logging.debug("New MonitoringDevice")
+        self._mpower = {
+            'val': 0,
+            'min': -500000,
+            'max': 500000,
+            'maxdiff': 400000
+        }
+
+    @property
+    def mins_remaining(self):
+        return self._mins_remaining
+    @mins_remaining.setter
+    def mins_remaining(self, value):
+        self._mins_remaining = value
