@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 from __future__ import absolute_import
-import sys
 import threading
 
 from argparse import ArgumentParser
@@ -12,24 +11,31 @@ import sys
 import gatt
 import time
 from datetime import datetime
+from dbus.exceptions import DBusException
 
 # import duallog
 import logging
 
 # duallog.setup('SmartPower', minLevel=logging.INFO)
 
-from datalogger import DataLogger
+# from datalogger import DataLogger
 
 
 
 # implementation of blegatt.DeviceManager, discovers any GATT device
 class SolarDeviceManager(gatt.DeviceManager):
+
     def device_discovered(self, device):
         logging.info("[{}] Discovered, alias = {}".format(device.mac_address, device.alias()))
-        # self.stop_discovery()   # in case to stop after discovered one device
+        self.stop_discovery()   # in case to stop after discovered one device
 
     def make_device(self, mac_address):
+        # if mac_address not in self._devices:
+        logging.info("[{}] Making device from mac".format(mac_address))
         return SolarDevice(mac_address=mac_address, manager=self)
+        # logging.warning("[{}] Already managed".format(mac_address))
+        # return None
+
 
 
 # implementation of blegatt.Device, connects to selected GATT device
@@ -55,7 +61,11 @@ class SolarDevice(gatt.Device):
         self.poller_thread = None
         self.run_command_poller = False
         self.command_thread = None
+        self.run_connect = False
+        self.connect_thread = None
         self.command_trigger = None
+        self.sleeper = threading.Event()
+        self.config = config
         if config:
             self.auto_reconnect = config.getboolean('monitor', 'reconnect', fallback=False)
             self.type = config.get(logger_name, 'type', fallback=None)
@@ -104,7 +114,11 @@ class SolarDevice(gatt.Device):
 
     def connect(self):
         logging.info("[{}] Connecting to {}".format(self.logger_name, self.mac_address))
-        super().connect()
+        try:
+            super().connect()
+        except DBusException as e:
+            logging.error("[{}] DBUS-error: {}".format(self.logger_name, e))
+            sys.exit(100)
 
     def connect_succeeded(self):
         super().connect_succeeded()
@@ -112,7 +126,7 @@ class SolarDevice(gatt.Device):
 
     def connect_failed(self, error):
         super().connect_failed(error)
-        logging.info("[{}] Connection failed: {}".format(self.logger_name, str(error)))
+        logging.error("[{}] Connection failed: {}".format(self.logger_name, str(error)))
         if self.poller_thread:
             self.run_device_poller = False
             logging.info("[{}] Stopping poller-thread".format(self.logger_name))
@@ -121,14 +135,15 @@ class SolarDevice(gatt.Device):
             self.run_command_poller = False
             self.command_trigger.set()
         if self.auto_reconnect:
-            logging.info("[{}] Reconnecting in 10 seconds".format(self.logger_name))
-            time.sleep(10)
+            logging.info("[{}] Reconnecting in 10 seconds...".format(self.logger_name))
+            self.sleeper.wait(10)
+            # time.sleep(10)
             self.connect()
 
 
     def disconnect_succeeded(self):
         super().disconnect_succeeded()
-        logging.info("[{}] Disconnected".format(self.logger_name))
+        logging.error("[{}] Disconnected".format(self.logger_name))
         if self.poller_thread:
             self.run_device_poller = False
             logging.info("[{}] Stopping poller-thread".format(self.logger_name))
@@ -138,11 +153,13 @@ class SolarDevice(gatt.Device):
             self.command_trigger.set()
         if self.auto_reconnect:
             logging.info("[{}] Reconnecting in 10 seconds".format(self.logger_name))
-            time.sleep(10)
+            self.sleeper.wait(10)
+            # time.sleep(10)
             self.connect()
 
     def services_resolved(self):
         super().services_resolved()
+        self.run_connect = False
         logging.info("[{}] Connected to {}".format(self.logger_name, self.alias()))
         logging.info("[{}] Resolved services".format(self.logger_name))
         self.util = self.module.Util(self)
@@ -164,16 +181,16 @@ class SolarDevice(gatt.Device):
         if device_notification_service:
             for c in device_notification_service.characteristics:
                 if self.char_notify and c.uuid in self.char_notify:
-                    logging.info("[{}] Found dev notify char [{}]".format(self.logger_name, c.uuid))
-                    logging.info("[{}] Subscribing to notify char [{}]".format(self.logger_name, c.uuid))
+                    logging.info("[{}]    - Found dev notify char [{}]".format(self.logger_name, c.uuid))
+                    logging.info("[{}]    + Subscribing to notify char [{}]".format(self.logger_name, c.uuid))
                     c.enable_notifications()
         if device_write_service:
             for c in device_write_service.characteristics:
                 if self.char_write_polling and c.uuid == self.char_write_polling:
-                    logging.info("[{}] Found dev write polling char [{}]".format(self.logger_name, c.uuid))
+                    logging.info("[{}]    - Found dev write polling char [{}]".format(self.logger_name, c.uuid))
                     self.device_write_characteristic_polling = c
                 if self.char_write_commands and c.uuid == self.char_write_commands:
-                    logging.info("[{}] Found dev write polling char [{}]".format(self.logger_name, c.uuid))
+                    logging.info("[{}]    - Found dev write polling char [{}]".format(self.logger_name, c.uuid))
                     self.device_write_characteristic_commands = c
 
 
@@ -919,6 +936,22 @@ class BatteryDevice(PowerDevice):
         cell = value[0]
         new_value = value[1]
         current_value = self._cell_mvoltage[cell]['val']
+        if current_value == 0 and new_value > 0 and new_value > self._cell_mvoltage[cell]['min'] and new_value < self._cell_mvoltage[cell]['max']:
+            # Starting up. Adding new values
+            self._cell_mvoltage[cell]['val'] = new_value
+            return True
+        if current_value == 0 and new_value == 0:
+            # Ignore these
+            return False
+        if new_value > self._cell_mvoltage[cell]['max']:
+            logging.warning("[{}] Value of cell {} out of bands: Changed from {} to {} (> max {})".format(self.name, cell, current_value, new_value, self._cell_mvoltage[cell]['max']))
+            return False
+        if new_value < self._cell_mvoltage[cell]['min']:
+            logging.warning("[{}] Value of cell {} out of bands: Changed from {} to {} (< min {})".format(self.name, cell, current_value, new_value, self._cell_mvoltage[cell]['min']))
+            return False
+        if abs(new_value - current_value) > self._cell_mvoltage[cell]['maxdiff']:
+            logging.warning("[{}] Value of cell {} out of bands: Changed from {} to {} (> maxdiff {})".format(self.name, cell, current_value, new_value, self._cell_mvoltage[cell]['maxdiff']))
+            return False
         if new_value > 0 and abs(new_value - current_value) > 10:
             self._cell_mvoltage[cell]['val'] = new_value
 
@@ -927,8 +960,8 @@ class BatteryDevice(PowerDevice):
         cell_array = {}
         for cell in self._cell_mvoltage:
             cell_array[cell] = {
-                    'val' : (self._cell_mvoltage[cell]['val'] * .001)
-                    }
+                'val' : (self._cell_mvoltage[cell]['val'] * .001)
+            }
         return cell_array
     @cell_voltage.setter
     def cell_voltage(self, value):

@@ -1,4 +1,4 @@
-import logging                                                     
+import logging
 import libscrc
 
 
@@ -14,6 +14,11 @@ class Config():
     DEVICE_ID = 255
 
 class Util():
+    '''
+    Read data from SolarLink Regulators
+
+
+    '''
 
     class BatteryParamInfo():
         REG_ADDR  = 256
@@ -37,8 +42,8 @@ class Util():
         off      = 0
 
 
-    def __init__(self, power_device):                  
-        self.PowerDevice = power_device                  
+    def __init__(self, power_device):
+        self.PowerDevice = power_device
         self.function_READ = 3
         self.function_WRITE = 6
 
@@ -52,7 +57,7 @@ class Util():
 
     def notificationUpdate(self, value, char):
         '''
-        Fortunately we read a different number of bytes from each register, so we can 
+        Fortunately we read a different number of bytes from each register, so we can
         abuse the "length" field (byte #3 in the response) as an "id"
         '''
         logging.debug("REG: {} VAL: {}".format(self.poll_register, value))
@@ -76,7 +81,7 @@ class Util():
             # Ignore for now
             pass
         elif value[0] != self.PowerDevice.device_id and len(self.param_buffer) < self.param_expect:
-            # Lets assume this is a follow up packet 
+            # Lets assume this is a follow up packet
             self.updateParamSettingData(value)
         else:
             logging.warning("Unknown packet received: {}".format(value))
@@ -265,7 +270,6 @@ class Util():
             logging.warning("Invalid BS {}".format(bs))
             return False
 
-        
         function = bs[1]
         if function == 6:
             # Response to write-function.  Ignore
@@ -286,32 +290,32 @@ class Util():
 
 
 
-    def create_poll_request(self, cmd):                             
+    def create_poll_request(self, cmd):
         logging.debug("{} {}".format("create_poll_request", cmd))
-        data = None                                
-        function = self.function_READ                          
+        data = None
+        function = self.function_READ
         device_id = self.PowerDevice.device_id
-        self.poll_register = cmd                                          
-        if cmd == 'SolarPanelAndBatteryState':                    
-            regAddr = self.SolarPanelAndBatteryState.REG_ADDR                   
+        self.poll_register = cmd
+        if cmd == 'SolarPanelAndBatteryState':
+            regAddr = self.SolarPanelAndBatteryState.REG_ADDR
             readWrd = self.SolarPanelAndBatteryState.READ_WORD
-        elif cmd == 'BatteryParamInfo':                                                                                                                      
+        elif cmd == 'BatteryParamInfo':
             regAddr = self.BatteryParamInfo.REG_ADDR
             readWrd = self.BatteryParamInfo.READ_WORD
-        elif cmd == 'SolarPanelInfo':               
-            regAddr = self.SolarPanelInfo.REG_ADDR                           
-            readWrd = self.SolarPanelInfo.READ_WORD                    
-        elif cmd == 'ParamSettingData':                                                   
-            regAddr = self.ParamSettingData.REG_ADDR 
-            readWrd = self.ParamSettingData.READ_WORD                                         
-        elif cmd == 'RegulatorPowerOn':  
+        elif cmd == 'SolarPanelInfo':
+            regAddr = self.SolarPanelInfo.REG_ADDR
+            readWrd = self.SolarPanelInfo.READ_WORD
+        elif cmd == 'ParamSettingData':
+            regAddr = self.ParamSettingData.REG_ADDR
+            readWrd = self.ParamSettingData.READ_WORD
+        elif cmd == 'RegulatorPowerOn':
             regAddr = self.RegulatorPower.REG_ADDR
-            readWrd = self.RegulatorPower.on                                       
-            function = self.function_WRITE                           
-        elif cmd == 'RegulatorPowerOff':                                                                                                          
+            readWrd = self.RegulatorPower.on
+            function = self.function_WRITE
+        elif cmd == 'RegulatorPowerOff':
             regAddr = self.RegulatorPower.REG_ADDR
-            readWrd = self.RegulatorPower.off                                                                         
-            function = self.function_WRITE                                     
+            readWrd = self.RegulatorPower.off
+            function = self.function_WRITE
 
         if regAddr:
             data = []

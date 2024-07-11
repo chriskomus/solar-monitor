@@ -17,7 +17,8 @@ class DataLoggerMqtt():
         self.broker = broker
         if not hostname:
             hostname = socket.gethostname()
-        self.client = paho.Client("{}".format(hostname))        #  create client object
+
+        self.client = paho.Client(paho.CallbackAPIVersion.VERSION1, "{}".format(hostname))        #  create client object
         if username and password:
             self.client.username_pw_set(username=username,password=password)
 
@@ -35,6 +36,7 @@ class DataLoggerMqtt():
             prefix = prefix + "/"
         self._prefix = prefix
         self.trigger = {}
+        self._listener_created = {}
 
     @property
     def prefix(self):
@@ -46,22 +48,25 @@ class DataLoggerMqtt():
             val = val + "/"
         self._prefix = val
 
-    def publish(self, device, var, val):
+    def publish(self, device, var, val, refresh=False):
         topic = "{}{}/{}/state".format(self.prefix, device, var)
-        if topic not in self.sensors:
+        if topic not in self.sensors or refresh:
             if "power_switch" in var:
                 # self.delete_switch(device, var)
-                # time.sleep(2)
+                # time.sleep(1)
                 self.create_switch(device, var)
                 self.create_listener(device, var)
             else:
-                self.delete_sensor(device, var)
-                time.sleep(2)
+                if not refresh:
+                    self.delete_sensor(device, var)
+                time.sleep(1)
                 self.create_sensor(device, var)
             self.sensors.append(topic)
-            time.sleep(0.5)
+            time.sleep(0.2)
         logging.debug("Publishing to MQTT {}: {} = {}".format(self.broker, topic, val))
         ret = self.client.publish(topic, val, retain=True)
+        if "power_switch" in var and time.time() > self._listener_created[device, var] + 300:
+            self.create_listener(device, var)
 
     def create_switch(self, device, var):
         topic = "{}{}/{}/state".format(self.prefix, device, var)
@@ -98,15 +103,24 @@ class DataLoggerMqtt():
             val['device_class'] = "power"
             val['unit_of_measurement'] = "W"
         elif var == "voltage" or var == "charge_voltage" or var == "input_voltage":
+            val['device_class'] = "voltage"
             val['icon'] = "mdi:flash"
             val['unit_of_measurement'] = "V"
         elif var == "current" or var == "charge_current" or var == "input_current":
+            val['device_class'] = "current"
             val['icon'] = "mdi:current-dc"
             val['unit_of_measurement'] = "A"
+        elif var.endswith("_state"):
+            val['device_class'] = "enum"
+            val['options'] = ["charging", "standby", "discharging"]
         elif var == "charge_cycles":
             val['icon'] = "mdi:recycle"
         elif var == "health":
             val['icon'] = "mdi:heart-flash"
+        elif "battery" in device and "cell" in var:
+            val['icon'] = "mdi:battery"
+            val['unit_of_measurement'] = "mV"
+            val['device_class'] = "voltage"
         elif "battery" in device:
             val['icon'] = "mdi:battery"
         elif "regulator" in device:
@@ -131,6 +145,7 @@ class DataLoggerMqtt():
         logging.info("Creating MQTT-listener {}".format(topic))
         try:
             self.client.subscribe((topic, 0))
+            self._listener_created[device, var] = time.time()
         except Exception as e:
             logging.error("MQTT: {}".format(e))
         self.sets[device] = []
@@ -181,7 +196,14 @@ class DataLogger():
             self.url = config.get('datalogger', 'url')
             self.token = config.get('datalogger', 'token')
         if config.get('mqtt', 'broker', fallback=None):
-            self.mqtt = DataLoggerMqtt(config.get('mqtt', 'broker'), 1883, prefix=config.get('mqtt', 'prefix'), username=config.get('mqtt', 'username'), password=config.get('mqtt', 'password'), hostname=config.get('mqtt', 'hostname'))
+            self.mqtt = DataLoggerMqtt(
+                config.get('mqtt', 'broker'),
+                config.get('mqtt', 'port', fallback=1883),
+                prefix=config.get('mqtt', 'prefix', fallback=None),
+                username=config.get('mqtt', 'username', fallback=None),
+                password=config.get('mqtt', 'password', fallback=None),
+                hostname=config.get('mqtt', 'hostname', fallback=None)
+            )
         self.logdata = {}
 
        
@@ -200,6 +222,7 @@ class DataLogger():
         device = device.strip()
         # ts = datetime.now().isoformat(' ', 'seconds')
         ts = datetime.now()
+        logging.debug("[{}] All data {}: {}".format(device, var, val))
         if device not in self.logdata:
             self.logdata[device] = {}
         if var not in self.logdata[device]:
@@ -212,19 +235,19 @@ class DataLogger():
             self.logdata[device][var]['value'] = val
             logging.info("[{}] Sending new data {}: {}".format(device, var, val))
             self.send_to_server(device, var, val)
-        elif self.logdata[device][var]['ts'] < datetime.now()-timedelta(minutes=15):
+        elif self.logdata[device][var]['ts'] < datetime.now()-timedelta(minutes=1):
             self.logdata[device][var]['ts'] = ts
             self.logdata[device][var]['value'] = val
             # logging.debug("Sending data to server due to long wait")
             logging.info("[{}] Sending refreshed data {}: {}".format(device, var, val))
-            self.send_to_server(device, var, val)
+            self.send_to_server(device, var, val, True)
 
 
 
 
-    def send_to_server(self, device, var, val):
+    def send_to_server(self, device, var, val, refresh=False):
         if self.mqtt:
-            self.mqtt.publish(device, var, val)
+            self.mqtt.publish(device, var, val, refresh)
         if self.url:
             logging.info("[{}] Sending data to {}".format(device, self.url))
             ts = datetime.now().isoformat(' ', 'seconds')

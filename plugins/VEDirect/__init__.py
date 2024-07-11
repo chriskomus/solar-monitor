@@ -1,4 +1,4 @@
-import logging                                                     
+import logging
 import time
 
 class Config():
@@ -15,8 +15,35 @@ class Config():
 
 
 class Util():
+    # https://community.victronenergy.com/storage/attachments/2273-vecan-registers-public.pdf
+    VREG_COMMANDS = {
+        'VREC': 0x0001,
+        'VACK': 0x0002,
+        'VPING': 0x0003,
+        'DEFAULTS': 0x0004,
+    }
+    # All ints are unsigned
+    VREG_RESPONSES = {
+        'ProductID': { 'key': 0x0100, 'format': { 'id': 'un8', 'prodid': 'un16', 'flags': 'un8'}},
+        'Revision': { 'key': 0x0101, 'format': { 'id': 'un8', 'revision': 'un16'}},
+        'FwVersion': { 'key': 0x0102, 'format': { 'id': 'un8', 'fw': 'un24'}},
+        'MinVersion': { 'key': 0x0103, 'format': { 'id': 'un8', 'fw': 'un24'}},
+        'GroupID': { 'key': 0x0104, 'format': { 'groupid': 'un8'}},
+        'HwRevision': { 'key': 0x0105, 'format': { 'hwrev': 'un8'}},
+        'SerialNumber': { 'key': 0x010a, 'format': { 'serial': 'string32' }},
+        'ModelName': { 'key': 0x010b, 'format': { 'model': 'string32' }},
+        'Description1': { 'key': 0x010c, 'format': { 'model': 'string' }},
+        'Description2': { 'key': 0x010d, 'format': { 'model': 'string' }},
+        'Identify': { 'key': 0x010e, 'format': { 'identify': 'un8'}},
+        'UdfVersion': { 'key': 0x0110, 'format': { 'version': 'un24', 'flags': 'un8' }},
+        'Uptime': { 'key': 0x0120, 'format': { 'uptime': 'un32'}},
+        'CanHwOverflows': { 'key': 0x0130, 'format': { 'overflows': 'un32'}},
+        'CanSwOverflows': { 'key': 0x0131, 'format': { 'overflows': 'un32'}},
+        'CanErrors': { 'key': 0x0132, 'format': { 'errors': 'un32'}},
+        'CanBusOff': { 'key': 0x0133, 'format': { 'bussoff': 'un32'}},
+    }
 
-    def __init__(self, power_device):                  
+    def __init__(self, power_device):
         self.PowerDevice = power_device
         self._char_buffer = b""
         self._is_initialized = False
@@ -35,13 +62,15 @@ class Util():
         return True
 
     def pollRequest(self):
+        logging.debug("{} {} => {}".format('pollRequest', self.poll_loop_count, self._is_initialized))
         data = None
         if not self._is_initialized and self.poll_loop_count == 2:
             self.send_magic_packets()
             self._is_initialized = True
-        elif self.poll_loop_count == 30:
-           data = self.create_poll_request("PollData")
-           self.poll_loop_count = 0
+        elif self.poll_loop_count == 5:
+            self.keep_alive()
+            self.poll_loop_count = 0
+        #    data = self.create_poll_request("PollData")
         self.poll_loop_count = self.poll_loop_count + 1
         return data
         # # Create a poll-request to ask for new data
@@ -91,42 +120,44 @@ class Util():
     def send_magic_packets(self):
         # Some kind of magic session init
         write_characteristic = self.PowerDevice.device_write_characteristic_polling
-        # c = charactersistcs["306b0002-b081-4037-83dc-e59fcc3cdfd0"]
+
         hs = "fa80ff"
         value  = bytearray.fromhex(hs)
         self.PowerDevice.characteristic_write_value(value, write_characteristic)
         time.sleep(0.1)
-        
+
         hs = "f980"
         value = bytearray.fromhex(hs)
         self.PowerDevice.characteristic_write_value(value, write_characteristic)
         time.sleep(0.1)
         # c.write_value(b);
-        
-        hs = "01"
-        value = bytearray.fromhex(hs)
-        self.PowerDevice.characteristic_write_value(value, write_characteristic)
-        time.sleep(0.1)
+
+        # Skal ikke dit...
+        # hs = "01"
+        # value = bytearray.fromhex(hs)
+        # self.PowerDevice.characteristic_write_value(value, write_characteristic)
+        # time.sleep(0.1)
         # c.write_value(b);
-        
+
+        # Send some data to the command-characteristics
         write_characteristic = self.PowerDevice.device_write_characteristic_commands
-        # c = charactersistcs["306b0003-b081-4037-83dc-e59fcc3cdfd0"]
-        
+
         hs = "01"
         value = bytearray.fromhex(hs)
         self.PowerDevice.characteristic_write_value(value, write_characteristic)
         time.sleep(0.1)
-        
+
         hs = "0300"
         value = bytearray.fromhex(hs)
         self.PowerDevice.characteristic_write_value(value, write_characteristic)
         time.sleep(0.1)
-        
+
         hs = "060082189342102703010303"
         value  = bytearray.fromhex(hs)
         self.PowerDevice.characteristic_write_value(value, write_characteristic)
         time.sleep(0.1)
-        
+
+        # Poll for data
         write_characteristic = self.PowerDevice.device_write_characteristic_polling
         # c = charactersistcs["306b0002-b081-4037-83dc-e59fcc3cdfd0"]
         hs = "f941"
@@ -134,7 +165,22 @@ class Util():
         self.PowerDevice.characteristic_write_value(value, write_characteristic)
         time.sleep(0.1)
         # c.write_value(b);
-        
+
+    def keep_alive(self):
+        # ("0024", "0600821893421027"),
+        # ("0021", "f941"),
+        write_characteristic = self.PowerDevice.device_write_characteristic_commands
+        hs = "060082189342102703010303"
+        value  = bytearray.fromhex(hs)
+        self.PowerDevice.characteristic_write_value(value, write_characteristic)
+        time.sleep(0.1)
+
+        write_characteristic = self.PowerDevice.device_write_characteristic_polling
+        hs = "f941"
+        value  = bytearray.fromhex(hs)
+        self.PowerDevice.characteristic_write_value(value, write_characteristic)
+        time.sleep(0.1)
+
 
     def validate(self):
         pass
