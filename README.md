@@ -10,6 +10,7 @@ Currently supported
   - monitored by TBEnergy APP: https://play.google.com/store/apps/details?id=com.topband.smartpower
 - Victron Energy - VE.Direct devices - currently only Phoenix inverters are tested.  Work in progress to add more devices
 - Renogy BT-1 (uses the same protocol as the SolarLink/SRNE)
+- Junctek BT Battery Monitor KG-F Series KH140F
 
 # Requirements
 Look at requirements.txt
@@ -45,7 +46,7 @@ docker logs solar-monitor
 
 You need the following:
 
-* solar-monitor.py  The actual daemon 
+* solar-monitor.py  The actual daemon
 * solardevice.py    Extension of ble gatt and some classes to store the values that are read from the BLE-devices
 * duallog.py        CLI and file-logger with multiple destinations
 * datalogger.py     Class for pushing data to remote servers
@@ -140,5 +141,5 @@ This allows you to remotely monitor the data from your installation:
 A huge thanks to Pramod P K https://github.com/prapkengr/ for doing reverse engineering and decompiling of the Android Apps to figure out the protocols used.
 
 <a href="https://www.buymeacoffee.com/olatho" target="_blank">
-<img src="https://user-images.githubusercontent.com/203184/184674974-db7b9e53-8c5a-40a0-bf71-c01311b36b0a.png" style="height: 50px !important;"> 
+<img src="https://user-images.githubusercontent.com/203184/184674974-db7b9e53-8c5a-40a0-bf71-c01311b36b0a.png" style="height: 50px !important;">
 </a>
