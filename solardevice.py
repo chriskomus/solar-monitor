@@ -1020,7 +1020,7 @@ class BatteryDevice(PowerDevice):
 
 class MonitoringDevice(BatteryDevice):
     '''
-    Special class for Battery Monitoring Devices.
+    For Battery Monitoring Devices.
     Extending BatteryDevice class with more properties specifically for the battery monitor
     '''
     def __init__(self, parent=None):
