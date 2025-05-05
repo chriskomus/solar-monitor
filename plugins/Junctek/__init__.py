@@ -1,23 +1,28 @@
-import re
 import logging
-import libscrc
+import time
+from collections import deque
 
-class Config():
-    SEND_ACK  = False
+
+class Config:
+    SEND_ACK = False
     NEED_POLLING = False
     NOTIFY_SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
     NOTIFY_CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 
-class Util():
-    '''
+
+class Util:
+    """
     Class for reading and parsing data from Junctek KF-KG Series Battery Monitor.
 
     All parameters from the Junctek are in the Parameters().PARAM_KEYS dict.
     Any formatting changes takes place in formatValues()
 
     User defined settings are in class: UserSettings()
-    '''
-    class UserSettings():
+    """
+
+    min_remaining_history = deque()
+
+    class UserSettings:
         # Set your battery capacity here (as an int):
         BATTERY_CAPACITY_AH = 100
 
@@ -26,18 +31,18 @@ class Util():
         # is charging when the script starts.
         START_SCRIPT_CHARGING = False
 
-
-    class Parameters():
+    class Parameters:
         BEGINNING_OF_STREAM = "BB"
         END_OF_STREAM = "EE"
         PARAM_KEYS = {
             "voltage": "C0",
             "current": "C1",
+            "soc": "D0",
             "dir_of_current": "D1",
             "ah_remaining": "D2",
             "mins_remaining": "D6",
             "power": "D8",
-            "temp": "D9"
+            "temp": "D9",
         }
 
     def __init__(self, power_device):
@@ -63,7 +68,7 @@ class Util():
         Validate that the data has a valid start of stream and end of stream,
         and contains at least one known parameter.
         """
-        if bs == None:
+        if bs is None:
             logging.warning("Empty BS {}".format(bs))
             return False
 
@@ -102,7 +107,7 @@ class Util():
         params_values = list(self.Parameters().PARAM_KEYS.values())
 
         # split bs into a list of all values and hex keys
-        bs_list = [bs[i:i+2] for i in range(0, len(bs), 2)]
+        bs_list = [bs[i : i + 2] for i in range(0, len(bs), 2)]
 
         # reverse the list so that values come after hex params
         bs_list_rev = list(reversed(bs_list))
@@ -113,9 +118,9 @@ class Util():
         # concatenation of all following elements in the list
         # until a non-numeric element appears. This would either
         # be the next param or the beginning hex value.
-        for i in range(len(bs_list_rev)-1):
+        for i in range(len(bs_list_rev) - 1):
             if bs_list_rev[i] in params_values:
-                value_str = ''
+                value_str = ""
                 j = i + 1
                 while j < len(bs_list_rev) and bs_list_rev[j].isdigit():
                     value_str = bs_list_rev[j] + value_str
@@ -132,8 +137,7 @@ class Util():
         """
         Format the value to the right decimal place, or perform other formatting
         """
-        for key,value in list(values.items()):
-
+        for key, value in list(values.items()):
             if not value.isdigit():
                 del values[key]
 
@@ -155,23 +159,47 @@ class Util():
                 values[key] = val_int / 100
             elif key == "temp":
                 values[key] = val_int - 100
+            # VERIFY
+            elif key == "soc":
+                values[key] = val_int * 100
 
         # Display current as negative numbers if discharging
-        if self.charging == False:
+        if not self.charging:
             if "current" in values:
                 values["current"] *= -1
             if "power" in values:
                 values["power"] *= -1
 
-        # Calculate percentage
-        if isinstance(self.UserSettings().BATTERY_CAPACITY_AH, int) and "ah_remaining" in values:
-            values["soc"] = values["ah_remaining"] / self.UserSettings().BATTERY_CAPACITY_AH * 100
+        # Calculate SoC
+        # if (
+        #     isinstance(self.UserSettings().BATTERY_CAPACITY_AH, int)
+        #     and "ah_remaining" in values
+        # ):
+        #     values["soc"] = (
+        #         values["ah_remaining"] / self.UserSettings().BATTERY_CAPACITY_AH * 100
+        #     )
+
+        # Calculate minutes remaining by taking avg of recent mins_remaining values
+        if "mins_remaining" in values:
+            now = time.time()
+            expiry_seconds = 600
+
+            self.min_remaining_history.append((now, values["mins_remaining"]))
+
+            while (
+                self.min_remaining_history
+                and now - self.min_remaining_history[0][0] > expiry_seconds
+            ):
+                self.min_remaining_history.popleft()
+
+            if self.min_remaining_history:
+                valid_values = [v for _, v in self.min_remaining_history]
+                values["mins_remaining"] = sum(valid_values) / len(valid_values)
 
         # Append max capacity
         values["max_capacity"] = self.UserSettings().BATTERY_CAPACITY_AH
 
         return values
-
 
     def handleMessage(self, values):
         if not values:
