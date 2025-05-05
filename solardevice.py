@@ -40,7 +40,7 @@ class SolarDeviceManager(gatt.DeviceManager):
 
 # implementation of blegatt.Device, connects to selected GATT device
 class SolarDevice(gatt.Device):
-    def __init__(self, mac_address, manager, logger_name = 'unknown', reconnect = False, type=None, datalogger=None, config=None):
+    def __init__(self, mac_address, manager, logger_name = 'unknown', reconnect = False, type=None, datalogger=None, queue=None, config=None):
         super().__init__(mac_address=mac_address, manager=manager)
         self.reader_activity = None
         self.logger_name = logger_name
@@ -57,6 +57,7 @@ class SolarDevice(gatt.Device):
         self.device_write_characteristic_polling = None
         self.device_write_characteristic_commands = None
         self.datalogger = datalogger
+        self.queue = queue
         self.run_device_poller = False
         self.poller_thread = None
         self.run_command_poller = False
@@ -64,7 +65,7 @@ class SolarDevice(gatt.Device):
         self.run_connect = False
         self.connect_thread = None
         self.command_trigger = None
-        self.sleeper = threading.Event()
+        # self.sleeper = threading.Event()
         self.config = config
         if config:
             self.auto_reconnect = config.getboolean('monitor', 'reconnect', fallback=False)
@@ -118,7 +119,8 @@ class SolarDevice(gatt.Device):
             super().connect()
         except DBusException as e:
             logging.error("[{}] DBUS-error: {}".format(self.logger_name, e))
-            sys.exit(100)
+            time.sleep(10)
+            # sys.exit(100)
 
     def connect_succeeded(self):
         super().connect_succeeded()
@@ -134,10 +136,11 @@ class SolarDevice(gatt.Device):
             logging.info("[{}] Stopping command-thread".format(self.logger_name))
             self.run_command_poller = False
             self.command_trigger.set()
+            self.command_trigger.clear()
         if self.auto_reconnect:
             logging.info("[{}] Reconnecting in 10 seconds...".format(self.logger_name))
-            self.sleeper.wait(10)
-            # time.sleep(10)
+            # self.sleeper.wait(10)
+            time.sleep(10)
             self.connect()
 
 
@@ -151,10 +154,11 @@ class SolarDevice(gatt.Device):
             logging.info("[{}] Stopping command-thread".format(self.logger_name))
             self.run_command_poller = False
             self.command_trigger.set()
+            self.command_trigger.clear()
         if self.auto_reconnect:
             logging.info("[{}] Reconnecting in 10 seconds".format(self.logger_name))
-            self.sleeper.wait(10)
-            # time.sleep(10)
+            # self.sleeper.wait(10)
+            time.sleep(10)
             self.connect()
 
     def services_resolved(self):
@@ -232,15 +236,16 @@ class SolarDevice(gatt.Device):
                     ]
             for item in items:
                 try:
-                    self.datalogger.log(self.logger_name, item, getattr(self.entities, item))
+                    logging.debug(f"Logging data: {self.logger_name}, {item}, {getattr(self.entities, item)}")
+                    self.queue.put((self.logger_name, item, getattr(self.entities, item)))
                 except Exception as e:
                     logging.debug("[{}] Could not find {}".format(self.logger_name, item))
                     pass
 
             # We want celsius, not kelvin
             try:
-                self.datalogger.log(self.logger_name, 'temperature', self.entities.temperature_celsius)
-                self.datalogger.log(self.logger_name, 'battery_temperature', self.entities.battery_temperature_celsius)
+                self.queue.put((self.logger_name, 'temperature', self.entities.temperature_celsius))
+                self.queue.put((self.logger_name, 'battery_temperature', self.entities.battery_temperature_celsius))
 
             except:
                 pass
@@ -249,7 +254,7 @@ class SolarDevice(gatt.Device):
             try:
                 for cell in self.entities.cell_mvoltage:
                     if self.entities.cell_mvoltage[cell]['val'] > 0:
-                        self.datalogger.log(self.logger_name, 'cell_{}'.format(cell), self.entities.cell_mvoltage[cell]['val'])
+                        self.queue.put((self.logger_name, 'cell_{}'.format(cell), self.entities.cell_mvoltage[cell]['val']))
             except:
                 pass
 
@@ -257,7 +262,7 @@ class SolarDevice(gatt.Device):
             try:
                 for cell in self.entities.cell_voltage:
                     if self.entities.cell_voltage[cell]['val'] > 0:
-                        self.datalogger.log(self.logger_name, 'cell_{}_voltage'.format(cell), self.entities.cell_voltage[cell]['val'])
+                        self.queue.put((self.logger_name, 'cell_{}_voltage'.format(cell), self.entities.cell_voltage[cell]['val']))
             except:
                 pass
 
@@ -322,6 +327,7 @@ class SolarDevice(gatt.Device):
                 self.datalogger.mqtt.sets[self.logger_name] = []
             except Exception as e:
                 logging.error("[{}] {} Something bad happened: {}".format(self.logger_name, threading.current_thread().name, e))
+                mqtt_sets = []
                 pass
             for msg in mqtt_sets:
                 var = msg[0]
@@ -484,6 +490,9 @@ class PowerDevice():
     def alias(self):
         return self.parent.alias()
 
+    @property
+    def queue(self):
+        return self.parent.queue
 
     @property
     def datalogger(self):
@@ -501,7 +510,7 @@ class PowerDevice():
         return (self.dsoc / 10)
     @soc.setter
     def soc(self, value):
-        self.dsoc = value * 10
+        self.validate('_dsoc', value * 10)
 
     @property
     def temperature(self):
@@ -522,28 +531,28 @@ class PowerDevice():
         return round((self.temperature - 2731) * 0.1, 1)
     @temperature_celsius.setter
     def temperature_celsius(self, value):
-        self.temperature = (value * 10) + 2731
+        self.validate('_dkelvin', (value * 10) + 2731)
 
     @property
     def temperature_fahrenheit(self):
         return round(((self.temperature * 0.18) - 459.67), 1)
     @temperature_fahrenheit.setter
     def temperature_fahrenheit(self, value):
-        self.temperature = (value + 459.67) * (5/9) * 10
+        self.validate('_dkelvin', (value + 459.67) * (5/9) * 10)
 
     @property
     def battery_temperature_celsius(self):
         return round((self.battery_temperature - 2731) * 0.1, 1)
     @battery_temperature_celsius.setter
     def battery_temperature_celsius(self, value):
-        self.battery_temperature = (value * 10) + 2731
+        self.validate('_bkelvin', (value * 10) + 2731)
 
     @property
     def battery_temperature_fahrenheit(self):
-        return round(((self.temperature * 0.18) - 459.67), 1)
+        return round(((self.battery_temperature * 0.18) - 459.67), 1)
     @battery_temperature_fahrenheit.setter
     def battery_temperature_fahrenheit(self, value):
-        self.temperature = (value + 459.67) * (5/9) * 10
+        self.validate('_bkelvin', (value + 459.67) * (5/9) * 10)
 
     @property
     def mcapacity(self):
@@ -706,7 +715,7 @@ class PowerDevice():
         if value != self._power_switch:
             self._power_switch = value
             try:
-                self.datalogger.log(self.logger_name, 'power_switch', self.power_switch)
+                self.queue.put((self.logger_name, 'power_switch', self.power_switch))
             except:
                 pass
 

@@ -6,4 +6,4 @@ libscrc
 python-dateutil
 dbus-python
 pycairo 
-PyGObject
+PyGObject==3.50.0
